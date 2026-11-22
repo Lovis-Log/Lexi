@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Lexi" parent="android:style/Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#111915</item>
+    <style name="Theme.Lexi" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F8FAFE</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
-    <style name="Theme.Lexi.Selection" parent="android:style/Theme.Material.Dialog.NoActionBar">
+    <style name="Theme.Lexi.Selection" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:backgroundDimAmount">0.42</item>
         <item name="android:windowCloseOnTouchOutside">true</item>

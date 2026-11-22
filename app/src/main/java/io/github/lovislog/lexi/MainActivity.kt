@@ -3,6 +3,9 @@ package io.github.lovislog.lexi
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -12,9 +15,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        val transparent = android.graphics.Color.TRANSPARENT
+        enableEdgeToEdge(SystemBarStyle.light(transparent, transparent), SystemBarStyle.light(transparent, transparent))
         val openSettings = intent.getBooleanExtra(OpenSettings, false)
-        setContent { LexiTheme { LexiApp(model, openSettings) } }
+        setContent {
+            val appearance by model.appearance.collectAsStateWithLifecycle()
+            LexiTheme(appearance) { LexiApp(model, openSettings) }
+        }
     }
 }
 
@@ -33,7 +40,8 @@ class ProcessTextActivity : ComponentActivity() {
             return
         }
         setContent {
-            LexiTheme {
+            val appearance by model.appearance.collectAsStateWithLifecycle()
+            LexiTheme(appearance) {
                 SelectionWindow(
                     model,
                     selected = selected.take(801),
