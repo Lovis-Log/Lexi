@@ -18,6 +18,15 @@ android {
         versionName = "0.1.0"
     }
 
+    buildTypes {
+        create("preview") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".preview"
+            versionNameSuffix = "-preview"
+            matchingFallbacks += "debug"
+        }
+    }
+
     buildFeatures { compose = true }
 
     compileOptions {

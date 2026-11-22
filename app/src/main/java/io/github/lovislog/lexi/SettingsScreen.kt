@@ -16,17 +16,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun SettingsPage(modifier: Modifier, model: LexiModel) {
@@ -74,6 +78,9 @@ private fun ProviderForm(
     var base by remember(config.baseUrl) { mutableStateOf(config.baseUrl) }
     var model by remember(config.model) { mutableStateOf(config.model) }
     var apiKey by remember { mutableStateOf("") }
+    var clipboardMessage by remember { mutableStateOf<String?>(null) }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     OutlinedTextField(
         value = base,
         onValueChange = { base = it },
@@ -93,17 +100,51 @@ private fun ProviderForm(
     )
     OutlinedTextField(
         value = apiKey,
-        onValueChange = { apiKey = it },
+        onValueChange = {
+            apiKey = it
+            clipboardMessage = null
+        },
         label = { Text("API Key") },
-        supportingText = { Text(if (config.hasKey) "接口地址相同时，留空会保留原密钥。" else "填写供应商发给你的密钥。") },
+        supportingText = {
+            Text(clipboardMessage ?: if (config.hasKey) {
+                "接口地址相同时，留空会保留原密钥。"
+            } else {
+                "填写供应商发给你的密钥。"
+            })
+        },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         enabled = !working,
         visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Ascii,
+            autoCorrectEnabled = false,
+        ),
     )
-    Button(
-        enabled = !working && base.isNotBlank() && model.isNotBlank(),
-        onClick = { onSave(base, model, apiKey) { apiKey = "" } },
-    ) { Text("保存接口") }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(
+            enabled = !working,
+            onClick = {
+                scope.launch {
+                    val key = clipboard.getClip()?.clipData?.getItemAt(0)?.text
+                        ?.toString()?.trim().orEmpty()
+                    if (key.isEmpty()) {
+                        clipboardMessage = "剪贴板里没有文本，请先复制 API Key。"
+                    } else {
+                        apiKey = key
+                        clipboardMessage = null
+                    }
+                }
+            },
+        ) { Text("粘贴 API Key") }
+        Button(
+            enabled = !working && base.isNotBlank() && model.isNotBlank(),
+            onClick = {
+                onSave(base, model, apiKey) {
+                    apiKey = ""
+                    clipboardMessage = null
+                }
+            },
+        ) { Text("保存接口") }
+    }
 }
