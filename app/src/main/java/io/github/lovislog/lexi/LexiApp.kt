@@ -1,118 +1,273 @@
 package io.github.lovislog.lexi
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-private enum class Page(val label: String) {
-    LOOKUP("查词"), REVIEW("复习"), LIBRARY("词库"), SETTINGS("设置")
+internal enum class Page(val label: LocalizedText) {
+    LOOKUP(LocalizedText("查词", "Lookup")),
+    REVIEW(LocalizedText("复习", "Review")),
+    LIBRARY(LocalizedText("词库", "Library")),
+    SETTINGS(LocalizedText("设置", "Settings")),
 }
+
+internal data class AppLocation(
+    val page: Page,
+    val historyOpen: Boolean,
+    val openAi: Boolean,
+    val query: String,
+    val context: String,
+    val lookup: LookupState,
+    val scroll: Int,
+)
 
 @Composable
 internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
     var page by rememberSaveable { mutableStateOf(if (openSettings) Page.SETTINGS else Page.LOOKUP) }
+    var historyOpen by rememberSaveable { mutableStateOf(false) }
+    var openAi by rememberSaveable { mutableStateOf(openSettings) }
     var query by rememberSaveable { mutableStateOf("") }
     var context by rememberSaveable { mutableStateOf("") }
+    var showPhotos by rememberSaveable { mutableStateOf(false) }
+    var photoSubmitted by rememberSaveable { mutableStateOf(false) }
+    val backStack = model.backStack
+    var lookupVisit by rememberSaveable { mutableIntStateOf(0) }
+    var scrollStart by rememberSaveable { mutableIntStateOf(0) }
+    val lookupScroll = rememberSaveable(lookupVisit, saver = ScrollState.Saver) { ScrollState(scrollStart) }
     val lookup by model.lookup.collectAsStateWithLifecycle()
     val cards by model.cards.collectAsStateWithLifecycle()
+    val history by model.history.collectAsStateWithLifecycle()
+    val reviewSession by model.reviewSession.collectAsStateWithLifecycle()
     val working by model.working.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
-    val snippets = remember { SnackbarHostState() }
-    val speak = rememberSpeech { message -> model.showNotice(message) }
+    val appearance = LocalAppearance.current
+    val snackbar = remember { SnackbarHostState() }
+    val pageState = rememberSaveableStateHolder()
 
-    LaunchedEffect(notice) {
+
+    LaunchedEffect(Unit) { model.loadProvider() }
+    LaunchedEffect(lookup) {
+        (lookup as? LookupState.Ready)?.result?.input?.let {
+            query = it.text
+            context = it.context
+        }
+    }
+    LaunchedEffect(notice, appearance.english) {
         notice?.let {
-            snippets.showSnackbar(it)
+            snackbar.showSnackbar(it.inLanguage(appearance.english))
             model.clearNotice()
         }
     }
+    fun location() = AppLocation(page, historyOpen, openAi, query, context, lookup, lookupScroll.value)
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snippets) },
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                Page.entries.forEach { item ->
-                    NavigationBarItem(
-                        selected = item == page,
-                        onClick = { page = item },
-                        icon = { PageIcon(item) },
-                        label = { Text(item.label) },
-                    )
-                }
+    fun rememberLocation(from: AppLocation = location()) {
+        if (backStack.size == 20) backStack.removeAt(0)
+        if (backStack.lastOrNull() != from) backStack.add(from)
+    }
+
+    fun resetLookupScroll(position: Int = 0) {
+        scrollStart = position
+        lookupVisit++
+    }
+
+    fun goBack() {
+        if (historyOpen) {
+            historyOpen = false
+            return
+        }
+        val previous = backStack.removeLastOrNull()
+        if (previous != null) {
+            val current = location()
+            page = previous.page
+            historyOpen = previous.historyOpen
+            openAi = previous.openAi
+            query = previous.query
+            context = previous.context
+            if (current.query != previous.query || current.context != previous.context || current.scroll != previous.scroll) {
+                resetLookupScroll(previous.scroll)
             }
-        },
-    ) { insets ->
-        Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
-            val modifier = Modifier.widthIn(max = 680.dp).fillMaxWidth()
-            when (page) {
-                Page.LOOKUP -> Column(
-                    modifier.verticalScroll(rememberScrollState()).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(22.dp),
-                ) {
-                    PageTitle("Lexi", "查一个词，或者问一句英文怎么说。")
-                    LookupPanel(
-                        query = query,
-                        context = context,
-                        state = lookup,
-                        saved = cards,
-                        working = working,
-                        onQuery = {
-                            query = it
-                            model.clearLookup()
-                        },
-                        onContext = {
-                            context = it
-                            model.clearLookup()
-                        },
-                        onSearch = { model.search(query, context) },
-                        onSave = model::save,
-                        onSpeak = speak,
-                        onSettings = { page = Page.SETTINGS },
-                    )
-                }
-                Page.REVIEW -> ReviewPage(modifier, cards, working, model::rate, speak)
-                Page.LIBRARY -> LibraryPage(modifier, cards, working, model::archive, speak)
-                Page.SETTINGS -> SettingsPage(modifier, model)
+            model.restoreLookup(previous.lookup)
+        } else if (page != Page.LOOKUP) {
+            page = Page.LOOKUP
+            openAi = false
+        } else if (lookup != LookupState.Idle) {
+            model.clearLookup()
+            resetLookupScroll()
+        } else {
+            query = ""
+            context = ""
+        }
+    }
+
+    val canGoBack = historyOpen || backStack.isNotEmpty() || page != Page.LOOKUP ||
+        lookup != LookupState.Idle || query.isNotBlank() || context.isNotBlank()
+    BackHandler(enabled = canGoBack && !showPhotos, onBack = ::goBack)
+
+    fun openAiSettings(from: AppLocation = location()) {
+        rememberLocation(from)
+        historyOpen = false
+        openAi = true
+        page = Page.SETTINGS
+    }
+
+    fun lookupAgain(input: LookupInput) {
+        rememberLocation()
+        page = Page.LOOKUP
+        query = input.text
+        context = input.context
+        historyOpen = false
+        resetLookupScroll()
+        model.search(query, context)
+    }
+
+    var pointer by remember(appearance.atmosphere) { mutableStateOf(Offset.Unspecified) }
+    val trackPointer = if (appearance.atmosphere == Atmosphere.GRID) Modifier.pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                pointer = event.changes.firstOrNull {
+                    event.type != PointerEventType.Exit && (it.pressed || it.type == PointerType.Mouse)
+                }?.position ?: Offset.Unspecified
             }
         }
+    } else Modifier
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).then(trackPointer)) {
+        AtmosphereLayer(Modifier.matchParentSize()) { pointer }
+        Scaffold(
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            snackbarHost = { SnackbarHost(snackbar) },
+            bottomBar = {
+                FloatingNavigation(page) { selected ->
+                    if (selected != page || historyOpen) {
+                        rememberLocation()
+                        historyOpen = false
+                        openAi = false
+                        page = selected
+                    }
+                }
+            },
+        ) { insets ->
+            Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
+                val modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()
+                pageState.SaveableStateProvider(if (historyOpen) "History" else page.name) {
+                    if (historyOpen) {
+                        HistoryPage(modifier, history, working, { historyOpen = false }, ::lookupAgain,
+                            model::deleteHistory, model::clearHistory)
+                    } else when (page) {
+                        Page.LOOKUP -> Column(
+                            modifier.verticalScroll(lookupScroll).padding(horizontal = 18.dp, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                if (canGoBack) TextButton(onClick = ::goBack) { Text(tr("‹ 返回", "‹ Back")) }
+                                BrandHeading(Modifier.weight(1f))
+                            }
+                            LookupPanel(
+                                query = query,
+                                context = context,
+                                state = lookup,
+                                saved = cards,
+                                working = working,
+                                onQuery = {
+                                    if (lookup is LookupState.Ready) rememberLocation()
+                                    query = it
+                                    model.clearLookup()
+                                },
+                                onContext = {
+                                    if (lookup is LookupState.Ready) rememberLocation()
+                                    context = it
+                                    model.clearLookup()
+                                },
+                                onSearch = { model.search(query, context) },
+                                onSave = model::save,
+                                onSettings = { openAiSettings() },
+                                onLinkedLookup = ::lookupAgain,
+                                onCamera = { showPhotos = true },
+                                recent = {
+                                    RecentLookups(history, lookup is LookupState.Loading, ::lookupAgain) { historyOpen = true }
+                                },
+                            )
+                        }
+                        Page.REVIEW -> ReviewPage(modifier, cards, working, reviewSession,
+                            model::syncReviewSession, model::focusReviewCard, model::rate, ::lookupAgain)
+                        Page.LIBRARY -> LibraryPage(modifier, cards, working, model::archive, ::lookupAgain) {
+                            rememberLocation()
+                            resetLookupScroll()
+                            query = ""
+                            context = ""
+                            model.clearLookup()
+                            page = Page.LOOKUP
+                        }
+                        Page.SETTINGS -> SettingsPage(modifier, model, openAi)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showPhotos) {
+        fun clearPhotoRequest() {
+            if (photoSubmitted) model.restoreLookup(model.photoOrigin?.lookup ?: LookupState.Idle)
+            photoSubmitted = false
+            model.photoOrigin = null
+        }
+
+        PhotoLookup(
+            sending = photoSubmitted && lookup is LookupState.Loading,
+            completed = photoSubmitted && lookup is LookupState.Ready,
+            failure = (lookup as? LookupState.Failed)?.takeIf { photoSubmitted },
+            onDismiss = { clearPhotoRequest(); showPhotos = false },
+            onComplete = {
+                model.photoOrigin?.let { rememberLocation(it) }
+                photoSubmitted = false
+                model.photoOrigin = null
+                resetLookupScroll()
+                showPhotos = false
+            },
+            onClearRequest = ::clearPhotoRequest,
+            onSettings = {
+                val origin = model.photoOrigin ?: location()
+                clearPhotoRequest()
+                showPhotos = false
+                openAiSettings(origin)
+            },
+            onVision = { image ->
+                if (!photoSubmitted) model.photoOrigin = location()
+                photoSubmitted = true
+                model.searchImage(image, context)
+            },
+        )
     }
 }
 
@@ -129,7 +284,14 @@ internal fun SelectionWindow(
     val cards by model.cards.collectAsStateWithLifecycle()
     val working by model.working.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
-    val speak = rememberSpeech(model::showNotice)
+    val previous = remember { mutableStateListOf<Pair<LookupInput, LookupState>>() }
+    fun goBack() {
+        val (input, state) = previous.removeLastOrNull() ?: return
+        query = input.text
+        context = input.context
+        model.restoreLookup(state)
+    }
+    BackHandler(enabled = previous.isNotEmpty(), onBack = ::goBack)
 
     Surface(
         modifier = Modifier.fillMaxWidth().heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.78f),
@@ -137,12 +299,13 @@ internal fun SelectionWindow(
         shape = MaterialTheme.shapes.extraLarge,
     ) {
         Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Lexi", style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Serif)
-                TextButton(onClick = onClose, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("关闭") }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (previous.isNotEmpty()) TextButton(onClick = ::goBack) { Text(tr("‹ 返回", "‹ Back")) }
+                BrandHeading(Modifier.weight(1f))
+                TextButton(onClick = onClose) { Text(tr("关闭", "Close")) }
             }
             LookupPanel(
                 query, context, lookup, cards, working,
@@ -156,26 +319,81 @@ internal fun SelectionWindow(
                 },
                 onSearch = { model.search(query, context) },
                 onSave = model::save,
-                onSpeak = speak,
                 onSettings = onOpenApp,
+                onLinkedLookup = {
+                    if (previous.size == 20) previous.removeAt(0)
+                    previous.add(LookupInput(query, context) to lookup)
+                    query = it.text
+                    context = it.context
+                    model.search(query, context)
+                },
                 compact = true,
             )
-            notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            notice?.let { Text(it.display(), style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
 
 @Composable
-internal fun PageTitle(name: String, description: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(name, style = MaterialTheme.typography.displaySmall, fontFamily = FontFamily.Serif)
-        Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+private fun BrandHeading(modifier: Modifier = Modifier) {
+    val slogan = tr("一词一境，温故知新", "Every word, in its living context.")
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            Icon(painterResource(R.drawable.lexi_icon), contentDescription = null,
+                modifier = Modifier.size(40.dp), tint = androidx.compose.ui.graphics.Color.Unspecified)
+        }
+        Text("Lexi", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text("|", color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodySmall)
+        Text(slogan, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
     }
 }
 
 @Composable
-private fun PageIcon(page: Page) {
-    val color = MaterialTheme.colorScheme.onSurface
+internal fun PageTitle(name: String) {
+    Text(name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+}
+
+@Composable
+private fun FloatingNavigation(page: Page, select: (Page) -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        FrostedCard(Modifier.widthIn(max = 510.dp).fillMaxWidth(), radius = 40) {
+            BoxWithConstraints(Modifier.padding(5.dp).selectableGroup()) {
+                val tabWidth = maxWidth / Page.entries.size
+                val offset by animateDpAsState(
+                    tabWidth * page.ordinal,
+                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
+                    label = "Selected tab",
+                )
+                Box(
+                    Modifier.offset(x = offset).width(tabWidth).height(53.dp)
+                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                )
+                Row(Modifier.fillMaxWidth()) {
+                    Page.entries.forEach { tab ->
+                        val active = tab == page
+                        val color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                        Column(
+                            Modifier.weight(1f).height(53.dp).clip(CircleShape)
+                                .selectable(selected = active, role = Role.Tab, onClick = { select(tab) }),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            PageIcon(tab, color)
+                            Text(tab.label.display(), style = MaterialTheme.typography.labelMedium,
+                                color = color, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageIcon(page: Page, color: androidx.compose.ui.graphics.Color) {
     Canvas(Modifier.size(22.dp)) {
         val unit = size.width / 24f
         val stroke = Stroke(1.6f * unit)

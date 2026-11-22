@@ -17,9 +17,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
-internal class ProviderConfig(val baseUrl: String, val model: String, val apiKey: String)
+internal data class ProviderConfig(
+    val baseUrl: String, val model: String, val apiKey: String, val visionModel: String = "",
+) {
+    override fun toString() = "ProviderConfig(model=$model)"
+}
 
-internal data class ProviderInfo(val baseUrl: String, val model: String, val hasKey: Boolean)
+internal data class ProviderInfo(
+    val baseUrl: String, val model: String, val hasKey: Boolean, val visionModel: String = "",
+)
 
 internal class ProviderSettings(context: Context) {
     private val store = PreferenceDataStoreFactory.create {
@@ -28,10 +34,12 @@ internal class ProviderSettings(context: Context) {
     private val baseKey = stringPreferencesKey("base_url")
     private val modelKey = stringPreferencesKey("model")
     private val secretKey = stringPreferencesKey("key_ciphertext")
+    private val visionKey = stringPreferencesKey("vision_model")
 
     suspend fun info(): ProviderInfo {
         val prefs = store.data.first()
-        return ProviderInfo(prefs[baseKey] ?: DefaultBaseUrl, prefs[modelKey].orEmpty(), prefs[secretKey] != null)
+        return ProviderInfo(prefs[baseKey] ?: DefaultBaseUrl, prefs[modelKey].orEmpty(), prefs[secretKey] != null,
+            prefs[visionKey].orEmpty())
     }
 
     suspend fun config(): ProviderConfig? = withContext(Dispatchers.IO) {
@@ -39,24 +47,25 @@ internal class ProviderSettings(context: Context) {
         val ciphertext = prefs[secretKey] ?: return@withContext null
         val model = prefs[modelKey] ?: return@withContext null
         val key = readKey(ciphertext)
-        ProviderConfig(prefs[baseKey] ?: DefaultBaseUrl, model, key)
+        ProviderConfig(prefs[baseKey] ?: DefaultBaseUrl, model, key, prefs[visionKey].orEmpty())
     }
 
-    suspend fun draft(base: String, model: String, apiKey: String): ProviderConfig = withContext(Dispatchers.IO) {
-        val url = endpoint(base) ?: throw LookupFailure("请输入有效的 HTTPS 接口地址。")
+    suspend fun draft(base: String, model: String, apiKey: String, vision: String = ""): ProviderConfig =
+        withContext(Dispatchers.IO) {
+        val url = endpoint(base) ?: throw LookupFailure("请输入有效的 HTTPS 接口地址。", "Enter a valid HTTPS endpoint.")
         val name = model.trim()
-        if (name.length > 150) throw LookupFailure("模型名称过长，请从模型列表选择。")
+        if (listOf(name, vision.trim()).any { it.length > 150 }) throw LookupFailure("模型名称过长，请从模型列表选择。", "The model ID is too long. Choose a model from the list.")
         val typed = apiKey.trim()
         if (typed.length > 2048 || typed.any { it.code !in 33..126 }) {
-            throw LookupFailure("API Key 含有无效字符。")
+            throw LookupFailure("API Key 含有无效字符。", "The API key contains invalid characters.")
         }
-        if (typed.isNotEmpty()) return@withContext ProviderConfig(base.trim(), name, typed)
+        if (typed.isNotEmpty()) return@withContext ProviderConfig(base.trim(), name, typed, vision.trim())
         val prefs = store.data.first()
         val ciphertext = prefs[secretKey]
         if (ciphertext == null || endpoint(prefs[baseKey] ?: DefaultBaseUrl) != url) {
-            throw LookupFailure("首次配置或切换接口时，请填写 API Key。")
+            throw LookupFailure("首次配置或切换接口时，请填写 API Key。", "Enter an API key when setting up or switching endpoints.")
         }
-        ProviderConfig(base.trim(), name, readKey(ciphertext))
+        ProviderConfig(base.trim(), name, readKey(ciphertext), vision.trim())
     }
 
     suspend fun save(config: ProviderConfig): ProviderInfo = withContext(Dispatchers.IO) {
@@ -64,16 +73,17 @@ internal class ProviderSettings(context: Context) {
             prefs[secretKey] = encrypt(config.apiKey)
             prefs[baseKey] = config.baseUrl
             prefs[modelKey] = config.model
+            prefs[visionKey] = config.visionModel
         }
-        ProviderInfo(config.baseUrl, config.model, hasKey = true)
+        ProviderInfo(config.baseUrl, config.model, hasKey = true, config.visionModel)
     }
 
     private fun readKey(ciphertext: String): String = try {
         decrypt(ciphertext)
     } catch (_: java.security.GeneralSecurityException) {
-        throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。")
+        throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。", "The saved API key could not be read. Enter it again in Settings.", opensSettings = true)
     } catch (_: IllegalArgumentException) {
-        throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。")
+        throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。", "The saved API key could not be read. Enter it again in Settings.", opensSettings = true)
     }
 
     private fun key(create: Boolean): SecretKey {

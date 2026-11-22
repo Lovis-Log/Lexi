@@ -1,12 +1,44 @@
 package io.github.lovislog.lexi
 
+import java.time.Instant
+import java.time.ZoneId
 import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
 
-internal enum class Rating(val grade: Int, val label: String) {
-    AGAIN(1, "忘记"), HARD(2, "吃力"), GOOD(3, "记得")
+internal fun buildReviewQueue(
+    cards: List<SavedCard>, remaining: Int, now: Long, alreadyReviewed: Set<String>,
+): List<SavedCard> {
+    var slots = remaining
+    val includedWords = alreadyReviewed.toMutableSet()
+    return cards.filter { it.schedule.dueAt <= now }
+        .sortedWith(compareBy<SavedCard> { it.schedule.phase == ReviewPhase.NEW }
+            .thenBy { it.schedule.dueAt }.thenBy { it.schedule.stability }.thenBy { it.savedAt }.thenBy { it.id })
+        .filter { card ->
+            val word = card.result.reviewWordKey
+            if (word in includedWords) true
+            else if (slots <= 0) false
+            else {
+                slots--
+                includedWords += word
+                true
+            }
+        }
+}
+
+internal enum class Rating(val grade: Int) { AGAIN(1), HARD(2), GOOD(3) }
+
+internal data class ReviewDay(val start: Long, val end: Long) {
+    fun includes(timestamp: Long?): Boolean = timestamp != null && timestamp >= start && timestamp < end
+}
+
+internal fun reviewDay(now: Long, zone: ZoneId = ZoneId.systemDefault()): ReviewDay {
+    val date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    return ReviewDay(
+        date.atStartOfDay(zone).toInstant().toEpochMilli(),
+        date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+    )
 }
 
 @Serializable
@@ -37,7 +69,7 @@ internal data class ReviewState(
 /**
  * FSRS-6 with its published defaults and 90% target retention.
  * Formula reference: https://github.com/open-spaced-repetition/awesome-fsrs/wiki/The-Algorithm#fsrs-6
- * Lexi uses one short learning step and stores absolute UTC timestamps.
+ * Lexi applies its own learning intervals and stores absolute timestamps.
  */
 internal object ReviewScheduler {
     private const val Minute = 60_000L
@@ -64,12 +96,13 @@ internal object ReviewScheduler {
                 } else {
                     ReviewPhase.LEARNING
                 }
-                next to 3 * Minute
+                next to Minute
             }
             rating == Rating.HARD && state.phase != ReviewPhase.REVIEW -> {
                 val next = if (state.phase == ReviewPhase.RELEARNING) state.phase else ReviewPhase.LEARNING
-                next to 6 * Minute
+                next to Day / 2
             }
+            new -> ReviewPhase.REVIEW to 4 * Day
             else -> {
                 // At 90% retention the interval in days equals stability by definition.
                 val intervalDays = stability.roundToInt().coerceIn(1, MaxDays)
