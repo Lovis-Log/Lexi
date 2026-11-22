@@ -1,5 +1,6 @@
 package io.github.lovislog.lexi
 
+import android.content.ClipboardManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -22,15 +23,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.launch
 
 @Composable
 internal fun SettingsPage(modifier: Modifier, model: LexiModel) {
@@ -79,8 +78,7 @@ private fun ProviderForm(
     var model by remember(config.model) { mutableStateOf(config.model) }
     var apiKey by remember { mutableStateOf("") }
     var clipboardMessage by remember { mutableStateOf<String?>(null) }
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
+    val clipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
     OutlinedTextField(
         value = base,
         onValueChange = { base = it },
@@ -125,15 +123,13 @@ private fun ProviderForm(
         TextButton(
             enabled = !working,
             onClick = {
-                scope.launch {
-                    val key = clipboard.getClip()?.clipData?.getItemAt(0)?.text
-                        ?.toString()?.trim().orEmpty()
-                    if (key.isEmpty()) {
-                        clipboardMessage = "剪贴板里没有文本，请先复制 API Key。"
-                    } else {
-                        apiKey = key
-                        clipboardMessage = null
-                    }
+                val key = clipboard?.primaryClip?.getItemAt(0)?.text
+                    ?.toString()?.trim().orEmpty()
+                if (key.isEmpty()) {
+                    clipboardMessage = "剪贴板里没有文本，请先复制 API Key。"
+                } else {
+                    apiKey = key
+                    clipboardMessage = null
                 }
             },
         ) { Text("粘贴 API Key") }
