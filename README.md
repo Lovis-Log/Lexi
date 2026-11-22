@@ -14,7 +14,7 @@ On Windows use `gradlew.bat`. The debug APK is generated at `app/build/outputs/a
 
 ## First lookup
 
-1. Open **设置** and set an HTTPS Chat Completions Base URL, model name, and your own API key. Copy the key and tap **粘贴 API Key** to fill it in. The default URL points to DeepSeek. Use a model that supports JSON object output.
+1. Open **设置** and enter an HTTPS Chat Completions Base URL and your API key. Tap **粘贴 API Key** to paste the key, then **获取模型** and choose a model. You can also enter a model ID manually. **保存并测试** runs one sample lookup and saves the settings once it succeeds. The default URL points to DeepSeek.
 2. Open **查词**, enter English text or ask in Chinese for an English expression. Add the original sentence when it helps resolve meaning.
 3. Tap **收藏** and open **复习**. English lookups become recognition cards. Chinese requests for expressions become production cards.
 4. In a compatible Android app, select text and choose **用 Lexi 查词** in the selection menu. Confirm the lookup in the dialog. Close it to return to the source app.

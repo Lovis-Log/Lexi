@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Lexi 验收版</string>
-    <string name="process_text">用 Lexi 验收版查词</string>
+    <string name="app_name">Lexi 测试版</string>
+    <string name="process_text">用 Lexi 测试版查词</string>
 </resources>

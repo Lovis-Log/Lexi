@@ -28,9 +28,9 @@ internal class LexiRepository(
     private val database: LexiDatabase,
     private val settings: ProviderSettings,
     private val resolver: ContentResolver,
+    private val service: LookupService,
 ) {
     private val dao = database.lexiDao()
-    private val service = LookupService()
     private val lookupLock = Mutex()
     val cards = dao.observeCards().map { rows -> rows.map(CardRow::toCard) }
 

@@ -38,33 +38,42 @@ internal class ProviderSettings(context: Context) {
         val prefs = store.data.first()
         val ciphertext = prefs[secretKey] ?: return@withContext null
         val model = prefs[modelKey] ?: return@withContext null
-        val key = try {
-            decrypt(ciphertext)
-        } catch (_: java.security.GeneralSecurityException) {
-            throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。")
-        } catch (_: IllegalArgumentException) {
-            throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。")
-        }
+        val key = readKey(ciphertext)
         ProviderConfig(prefs[baseKey] ?: DefaultBaseUrl, model, key)
     }
 
-    suspend fun save(base: String, model: String, apiKey: String) = withContext(Dispatchers.IO) {
+    suspend fun draft(base: String, model: String, apiKey: String): ProviderConfig = withContext(Dispatchers.IO) {
         val url = endpoint(base) ?: throw LookupFailure("请输入有效的 HTTPS 接口地址。")
         val name = model.trim()
-        val key = apiKey.trim()
-        if (name.isBlank() || name.length > 150) throw LookupFailure("请输入供应商提供的模型名称。")
-        if (key.length > 2048 || key.any { it.code !in 33..126 }) {
+        if (name.length > 150) throw LookupFailure("模型名称过长，请从模型列表选择。")
+        val typed = apiKey.trim()
+        if (typed.length > 2048 || typed.any { it.code !in 33..126 }) {
             throw LookupFailure("API Key 含有无效字符。")
         }
-        store.edit { prefs ->
-            val previous = endpoint(prefs[baseKey] ?: DefaultBaseUrl)
-            if (key.isEmpty() && (prefs[secretKey] == null || previous != url)) {
-                throw LookupFailure("首次配置或切换接口时，请填写 API Key。")
-            }
-            if (key.isNotEmpty()) prefs[secretKey] = encrypt(key)
-            prefs[baseKey] = base.trim()
-            prefs[modelKey] = name
+        if (typed.isNotEmpty()) return@withContext ProviderConfig(base.trim(), name, typed)
+        val prefs = store.data.first()
+        val ciphertext = prefs[secretKey]
+        if (ciphertext == null || endpoint(prefs[baseKey] ?: DefaultBaseUrl) != url) {
+            throw LookupFailure("首次配置或切换接口时，请填写 API Key。")
         }
+        ProviderConfig(base.trim(), name, readKey(ciphertext))
+    }
+
+    suspend fun save(config: ProviderConfig): ProviderInfo = withContext(Dispatchers.IO) {
+        store.edit { prefs ->
+            prefs[secretKey] = encrypt(config.apiKey)
+            prefs[baseKey] = config.baseUrl
+            prefs[modelKey] = config.model
+        }
+        ProviderInfo(config.baseUrl, config.model, hasKey = true)
+    }
+
+    private fun readKey(ciphertext: String): String = try {
+        decrypt(ciphertext)
+    } catch (_: java.security.GeneralSecurityException) {
+        throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。")
+    } catch (_: IllegalArgumentException) {
+        throw LookupFailure("无法读取保存的 API Key，请在设置中重新填写。")
     }
 
     private fun key(create: Boolean): SecretKey {

@@ -21,7 +21,7 @@ android {
     buildTypes {
         create("preview") {
             initWith(getByName("debug"))
-            applicationIdSuffix = ".preview"
+            applicationIdSuffix = ".acceptance"
             versionNameSuffix = "-preview"
             matchingFallbacks += "debug"
         }
