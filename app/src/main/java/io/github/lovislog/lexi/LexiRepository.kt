@@ -63,7 +63,7 @@ internal class LexiRepository(
                 }
             }
             cached(LookupSchemaVersion)?.let { return@withLock remember(it) }
-            val legacy = cached(3) ?: cached(2) ?: cached(1)
+            val legacy = cached(4) ?: cached(3) ?: cached(2) ?: cached(1)
             val config = try {
                 settings.config()
             } catch (failure: LookupFailure) {
@@ -147,9 +147,9 @@ internal class LexiRepository(
         all.size
     }
 
-    suspend fun exportPdf(uri: Uri, english: Boolean): Int = withContext(Dispatchers.IO) {
+    suspend fun exportPdf(uri: Uri): Int = withContext(Dispatchers.IO) {
         val cards = dao.allCards().map(CardRow::toCard)
-        resolver.openOutputStream(uri, "wt")?.use { writeVocabularyPdf(it, cards, english) }
+        resolver.openOutputStream(uri, "wt")?.use { writeVocabularyPdf(it, cards) }
             ?: throw IOException("Could not open PDF")
         cards.size
     }
@@ -188,7 +188,8 @@ private data class Backup(val version: Int, val cards: List<SavedCard>)
 private fun SavedCard.isValid(): Boolean {
     return savedAt in 1..253402300799999L &&
         result.input == result.input.normalized() &&
-        result.input.isValid() && result.explanation.isValid() && schedule.isValid() &&
+        result.input.isValid() && result.langGroup == result.subType.language &&
+        result.explanation.isValid() && schedule.isValid() &&
         listOfNotNull(firstReviewAt, lastCompletedAt).all { schedule.lastReviewAt != null && it in 1..schedule.lastReviewAt }
 }
 

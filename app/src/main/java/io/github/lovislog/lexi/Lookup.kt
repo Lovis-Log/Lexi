@@ -2,6 +2,8 @@ package io.github.lovislog.lexi
 
 import java.security.MessageDigest
 import java.util.Locale
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -59,6 +61,7 @@ data class Explanation(
     val translation: TranslationAnalysis? = null,
     val englishSentence: EnglishSentenceAnalysis? = null,
     val analysisPayload: JsonObject? = null,
+    val analysisSchemaVersion: Int? = null,
 )
 
 @Serializable
@@ -83,7 +86,13 @@ data class LookupInput(val text: String, val context: String = "") {
 }
 
 @Serializable
-data class LookupResult(val input: LookupInput, val explanation: Explanation) {
+@OptIn(ExperimentalSerializationApi::class)
+data class LookupResult(
+    val input: LookupInput,
+    val explanation: Explanation,
+    @EncodeDefault @SerialName("sub_type") val subType: LibrarySubType = classifyEntry(input, explanation),
+    @EncodeDefault @SerialName("lang_group") val langGroup: LibraryLanguage = subType.language,
+) {
     val id: String get() = input.identity
 }
 
@@ -95,26 +104,26 @@ internal val LookupResult.reviewWordKey: String
 
 internal val Explanation.hasAnalysis: Boolean get() = wordAnalysis != null || translation != null || englishSentence != null
 internal val Explanation.analysisVersion: Int get() = when {
-    analysisPayload != null -> LookupSchemaVersion
+    analysisPayload != null -> analysisSchemaVersion ?: 4
     hasAnalysis -> 3
     else -> 1
 }
 internal val Explanation.contextAdaptationNote: String?
     get() = wordAnalysis?.contextAdaptationNote ?: translation?.contextAdaptationNote ?: englishSentence?.contextAdaptationNote
 internal val Explanation.sceneCompanions: List<SceneCompanion>
-    get() = wordAnalysis?.sceneCompanions ?: translation?.sceneCompanions.orEmpty()
+    get() = wordAnalysis?.sceneCompanions ?: translation?.sceneCompanions ?: englishSentence?.sceneCompanions.orEmpty()
 
 internal val Explanation.headSegments: List<EnglishSegment>
     get() = wordAnalysis?.wordSegments ?: translation?.primaryTranslation?.clickableSegments ?: englishSentence?.sourceSegments.orEmpty()
 
 internal fun Explanation.isValid(): Boolean {
-    if (answerEn.isBlank() || meaningZh.isBlank() || usageEn.isBlank() ||
+    if (answerEn.isBlank() || meaningZh.isBlank() ||
         answerEn.length > 1600 || meaningZh.length > 1600 || usageEn.length > 1600) return false
     if (listOfNotNull(wordAnalysis, translation, englishSentence).size > 1) return false
     wordAnalysis?.let { return intent == LookupIntent.UNDERSTAND && it.isValid() }
     translation?.let { return intent == LookupIntent.EXPRESS && it.isValid() }
     englishSentence?.let { return intent == LookupIntent.UNDERSTAND && it.isValid() }
-    return tag.length <= 80 && ipa.length <= 120 && senses.size <= 5 && examples.size <= 6 &&
+    return usageEn.isNotBlank() && tag.length <= 80 && ipa.length <= 120 && senses.size <= 5 && examples.size <= 6 &&
         alternatives.size <= 3 && collocations.size <= 6 && synonymNotes.size <= 6 &&
         listOf(partOfSpeech, frequency, cefr, syllables, ipaUs, ipaUk).all { it.length <= 120 } &&
         listOf(grammar, imagery, etymology, memoryNetwork, pitfalls).all { it.length <= 1600 } &&

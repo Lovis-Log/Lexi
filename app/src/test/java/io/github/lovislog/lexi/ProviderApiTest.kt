@@ -74,14 +74,14 @@ class ProviderApiTest {
 
     @Test
     fun aMissingLookupFieldPromptsOneRepairAndOnlyAcceptsACompleteEntry() = runBlocking {
-        val missingField = Apple.replace("\"context_adaptation_note\":null,", "")
+        val missingField = Apple.replace("\"en\":\"A defined usage.\",", "")
         val server = ProviderFixture(200 to reply(missingField), 200 to reply(Apple))
         val answer = server.service.explain(LookupInput("apple"), Config)
         assertEquals(payload(Apple), answer.analysisPayload)
         assertEquals(2, server.requests.size)
         assertFalse(server.requests.first().body.contains("上次输出未通过校验"))
         assertTrue(server.requests.last().body.contains("上次输出未通过校验"))
-        assertTrue(server.requests.last().body.contains("检查 context_adaptation_note"))
+        assertTrue(server.requests.last().body.contains("检查 definitions"))
     }
 
     @Test
@@ -140,7 +140,7 @@ class ProviderApiTest {
 
     @Test
     fun malformedResponseCannotBecomeAPartialLookupResult() = runBlocking {
-        val malformed = reply(Apple.replace("\"example_zh\":\"她切了一个脆苹果。\",", ""))
+        val malformed = reply(Apple.replace("\"en\":\"A defined usage.\",", ""))
         val server = ProviderFixture(200 to malformed, 200 to malformed)
         val failure = runCatching {
             server.service.explain(LookupInput("apple"), ProviderConfig(DefaultBaseUrl, "compatible", Key))
@@ -253,14 +253,71 @@ class ProviderApiTest {
 
 
     @Test
-    fun invalidSegmentsOrMismatchedCardAnswersAreRejected() {
+    fun brokenEnglishSentenceSegmentsAndReviewAnswersRecoverFromTheSource() {
         val sentence = LookupInput("They argued but soon made up.")
         val brokenSegments = EnglishSentence.replace("\"text\":\" but soon \"", "\"text\":\" but soon\"")
         val brokenAnswer = EnglishSentence.replace("\"expression_back_en\":\"They argued but soon made up.\"",
             "\"expression_back_en\":\"They argued.\"")
-        for (response in listOf(brokenSegments, brokenAnswer)) {
-            assertTrue(runCatching { sentence.decodeAnalysis(response) }.exceptionOrNull() is LookupFailure)
-        }
+        val segments = sentence.decodeAnalysis(brokenSegments)
+        assertTrue(segments.headSegments.isEmpty())
+        val answer = sentence.decodeAnalysis(brokenAnswer)
+        assertEquals(sentence.text, LookupResult(sentence, answer).reviewFaces(true).back.title)
+    }
+
+    @Test
+    fun chineseSentenceRecoversAnInvalidReviewCardWithoutDiscardingTheTranslation() {
+        val input = LookupInput("我心情很不好")
+        val answer = input.decodeAnalysis(
+            """{
+                "query_type":"zh_sentence","source_zh":"我心情很不好",
+                "primary_translation":{"en":"I'm in a bad mood.","clickable_segments":[
+                    {"text":"I'm in a bad mood.","query":null,"is_phrase":false}]},
+                "review_card":{"front_hints":4,"back_answer_segments":{}}
+            }""",
+        )
+        val card = answer.translation!!.reviewCard
+        assertEquals(input.text, card.frontPromptZh)
+        assertEquals("I'm in a bad mood.", card.backAnswerEn)
+        assertEquals(card.backAnswerEn, card.backAnswerTtsText)
+        assertEquals(answer.headSegments, card.backAnswerSegments)
+        assertTrue(card.frontHints.isEmpty())
+        assertTrue(answer.isValid())
+    }
+
+    @Test
+    fun chineseCandidatesSurviveSerializationAndAppearTogetherOnTheExpressionCard() {
+        val input = LookupInput("进位")
+        val result = savedRoundTrip(LookupResult(input, input.decodeAnalysis(
+            """{
+                "query_type":"zh_term","source_zh":"进位","sub_type":"zh_vocab","word":"carry over",
+                "definitions":[{"pos":"v.","en":"Transfer a digit to the next position.","zh":"进位"}],
+                "english_equivalents":[
+                    {"en":"carry over","phonetic_us":"ˈkæri ˈoʊvər","phonetic_uk":"ˈkæri ˈəʊvə","pos":"v.","usage_label_zh":"通用动词短语","nuance_zh":"向高位进一"},
+                    {"en":"carry the one","phonetic_us":"","phonetic_uk":"","pos":"v.","usage_label_zh":"口语","nuance_zh":"把进位的 1 写到上一位"}
+                ]
+            }""",
+        )))
+        assertEquals(LibraryLanguage.ZH, result.langGroup)
+        assertEquals(LibrarySubType.ZH_VOCAB, result.subType)
+        assertEquals(listOf("carry over", "carry the one"), result.englishEquivalents.map { it.en })
+        assertEquals("进位", result.reviewFaces(true).front.title)
+        assertEquals("carry over", result.reviewFaces(true).back.title)
+        assertTrue(result.reviewFaces(true).back.notes.any { it.contains("carry the one") })
+    }
+
+    @Test
+    fun englishSentenceWithCompanionsCanOmitTheReviewCard() {
+        val input = LookupInput("The ship left the harbor.")
+        val answer = input.decodeAnalysis(
+            """{
+                "query_type":"en_sentence","source_en":"The ship left the harbor.",
+                "natural_translation_zh":"船离开了港口。",
+                "scene_companions":[{"en":"dock","zh":"码头","phonetic":"","relation_zh":"船舶停靠"}]
+            }""",
+        )
+        assertEquals("dock", answer.sceneCompanions.single().en)
+        assertEquals(input.text, LookupResult(input, answer).reviewFaces(true).back.title)
+        assertTrue(answer.isValid())
     }
 
     private suspend fun accepted(text: String, answer: String): LookupResult {

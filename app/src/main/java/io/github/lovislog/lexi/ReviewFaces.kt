@@ -35,6 +35,20 @@ internal fun LookupResult.reviewFaces(expressionMode: Boolean): ReviewFaces {
             )
         }
     }
+    if (expressionMode && langGroup == LibraryLanguage.ZH && subType != LibrarySubType.ZH_SENTENCE) {
+        val card = answer.wordAnalysis?.reviewCardSummary
+        return ReviewFaces(
+            ReviewFace(chineseHeadword, supportingText = card?.expressionClozeEn.orEmpty()),
+            ReviewFace(
+                englishEquivalents.firstOrNull()?.en ?: answer.answerEn, answer.headSegments,
+                supportingText = card?.expressionClozeAnswerEn.orEmpty(),
+                notes = englishEquivalents.mapIndexedNotNull { index, candidate ->
+                    val details = listOf(candidate.usageLabelZh, candidate.nuanceZh).filter(String::isNotBlank)
+                    (listOf(candidate.en) + details).joinToString(" · ").takeIf { index != 0 || details.isNotEmpty() }
+                },
+            ),
+        )
+    }
     answer.wordAnalysis?.let { word ->
         val card = word.reviewCardSummary
         return if (expressionMode) {

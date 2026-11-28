@@ -27,7 +27,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 internal const val DefaultBaseUrl = "https://api.deepseek.com"
-internal const val LookupSchemaVersion = 4
+internal const val LookupSchemaVersion = 5
 
 internal open class LookupFailure(
     message: String,

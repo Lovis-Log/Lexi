@@ -188,7 +188,7 @@ fun syncReviewSession(day: ReviewDay, active: Set<String>, due: List<SavedCard>)
     }
 
     fun exportPdf(uri: Uri) = action {
-        val count = repository.exportPdf(uri, appearance.value.english)
+        val count = repository.exportPdf(uri)
         mutableNotice.value = LocalizedText("已导出 $count 张卡片至 PDF", "Exported $count cards to PDF")
     }
 

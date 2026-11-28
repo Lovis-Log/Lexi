@@ -9,7 +9,7 @@ internal val LookupFormat.systemPrompt: String
         LookupFormat.TRANSLATION -> PromptRules + TranslationPrompt
         LookupFormat.ENGLISH_SENTENCE -> PromptRules + EnglishSentencePrompt
         LookupFormat.MIXED -> PromptRules + """
-            根据输入主体区分词或短语、中文句子、英文句子。只输出相应模板的一个 JSON 对象。
+            根据输入主体区分词或短语、中文句子、英文句子。中文成语、惯用语和固定说法归 zh_term，即使较长或带逗号。只输出相应模板的一个 JSON 对象。
         """.trimIndent() + "\n\n" + WordPrompt + WordOutputExample +
             "\n\n" + TranslationPrompt + "\n\n" + EnglishSentencePrompt
     }
@@ -47,14 +47,20 @@ private val WordPrompt = """
 核心规范：
 1. 上下文强绑定：若 `user_context` 不为空，必须优先依该语境排定 `definitions[0]`、例句场景与复习卡内容，并在 `context_adaptation_note` 用中文说明调整原因；为空则返回 `null`。
 2. 严禁废话复述：禁止用 "Use it for..." 把英文释义复述一遍，每个字段必须提供新信息。
-3. 中文查询同境词（`scene_companions`）：当输入为中文生活实体词/场景词（如“洗发水”、“挂号”）或具象英文日常名词时，给出 3-4 个同场景高频关联词（如 `body wash / 沐浴露`、`conditioner / 护发素`）；无明显同境词则返回 `[]`。
+3. 同境表达（`scene_companions`）：英文单词、英文短语和中文词汇只要有明确的生活或专业场景，给出 3-4 个同场景高频英文表达及读音、中文简释、关系说明。查 ship 可给 harbor、cargo、dock、voyage。无明显关联则返回 []。
 4. 全量点词/点短语切分（`clickable_segments`）：凡是带 `clickable_segments` 的英文内容，必须无损切分为片段数组，所有 `text` 拼接后严格等于原英文字符串（含空格与标点）。固定搭配/短语（如 `make up`、`in a bad mood`、`pay attention to`）合并为单个 segment（`is_phrase: true`，`query` 填短语原型）；独立实义词 `is_phrase: false`（`query` 填词典原型）；空格、标点及无需跳转的虚词设 `query: null`。
 5. 纯净朗读文本（`tts_text`）：去除括号注释、斜杠或占位符（如 `sth`/`sb`），确保 TTS 可直接自然朗读。
 6. 防复习卡错配：表达卡正面考中文词义时，辅助挖空句必须与背面完整句一一对应，禁止正面出陌生整句、背面只答单个词。
+7. 中文词条（zh_term）：source_zh 原样抄录中文输入。english_equivalents 按常用度给 1–3 个地道的英文表达，注明美式和英式音标、词性、场景标签及中文用法区别。word 必须等于第一项 en。例如“进位”可用 carry over（通用动词短语）、carry the one（口语进一）、carry（数学或计算机名词）。sub_type 对成语、惯用语、固定说法填 zh_idiom，普通词汇和术语填 zh_vocab。英文查询的 source_zh 和 sub_type 填 null，english_equivalents 填 []。
 
 严格按以下 JSON Schema 输出，只返回 JSON 对象，保留所有字段，不添加 Markdown 围栏：
 {
   "query_type": "word | phrase | zh_term",
+  "source_zh": "string | null",
+  "sub_type": "string | null",
+  "english_equivalents": [
+    { "en": "string", "phonetic_us": "string", "phonetic_uk": "string", "pos": "string", "usage_label_zh": "string", "nuance_zh": "string" }
+  ],
   "word": "string",
   "tts_text": "string",
   "word_segments": [
@@ -138,13 +144,16 @@ private val TranslationPrompt = """
 1. 上下文强绑定：若 `user_context` 不为空（如“发给客户”、“语气委婉”），`primary_translation` 必须直接调整为该语境下的最佳表达，并在 `context_adaptation_note` 说明调整点；为空则填 `null`。
 2. 拒绝翻译腔：首选译文必须地道自然，同时提供 2 个不同语气的变体。
 3. 短语连线切分（`clickable_segments`）：首选译文与所有变体译文都必须附带 `clickable_segments`。固定短语（如 `in a bad mood`、`get back to`、`sleep on it`）合并为单个 segment（`is_phrase: true`），实义单词单独切分（`is_phrase: false`，`query` 填原型），空格与标点 `query: null`，所有 `text` 拼接严格等于原句。
-4. 同境词拓展（`scene_companions`）：若中文句子包含具体物品或生活场景词（如“沐浴露”、“登机牌”），补充 2-3 个同场景高频英文词；无则返回 `[]`。
+4. 同境表达（`scene_companions`）：若中文句子含具体的生活或专业场景词，给出 3-4 个同场景高频英文表达及读音、中文简释、关系说明；无则返回 []。
 5. 复习卡严丝合缝：正面展示 `source_zh`，背面答案必须是 `primary_translation.en` 的完整整句与音频文本。
+6. usage_note_en 用英文解释首选译文的核心表达与适用语境。context_examples 提供 1–2 条运用同一表达或句型的双语场景例句。
 
 严格按以下 JSON Schema 输出，只返回 JSON 对象，保留所有字段，不添加 Markdown 围栏：
 {
   "query_type": "zh_sentence",
   "source_zh": "string",
+  "usage_note_en": "string",
+  "context_examples": [{ "en": "string", "zh": "string" }],
   "scene_tags": ["string"],
   "context_adaptation_note": "string | null",
   "primary_translation": {
@@ -202,11 +211,15 @@ private val EnglishSentencePrompt = """
 2. 全句虚下划线切分（`source_segments`）：必须将用户输入的原英文句子无损切分为可点击片段。固定搭配/短语（如 `made up` -> `query: "make up"`、`is_phrase: true`）合并为单个 segment；实义单词各自切分（`query` 填词典原型）；空格标点 `query: null`。
 3. 句法与词块拆解：提炼 1-2 个可复用的句型骨架，并把句中值得学的生词或地道词块放入 `key_chunks`。
 4. 复习卡对齐：认读正面展示原英文句，背面展示地道中文译文与核心点拨；表达正面展示中文译文与提示词，背面还原原英文句。
+5. 若原句含具体生活或专业场景词，scene_companions 给出 3-4 个同场景高频英文表达及读音、中文简释、关系说明；无则返回 []。
+6. usage_note_en 用英文解释原句的核心表达与适用语境。context_examples 提供 1–2 条运用同一表达或句型的双语场景例句。
 
 严格按以下 JSON Schema 输出，只返回 JSON 对象，保留所有字段，不添加 Markdown 围栏：
 {
   "query_type": "en_sentence",
   "source_en": "string",
+  "usage_note_en": "string",
+  "context_examples": [{ "en": "string", "zh": "string" }],
   "tts_text": "string",
   "source_segments": [
     { "text": "string", "query": "string | null", "is_phrase": "boolean" }
@@ -214,6 +227,9 @@ private val EnglishSentencePrompt = """
   "context_adaptation_note": "string | null",
   "natural_translation_zh": "string",
   "tone_and_scene": "string",
+  "scene_companions": [
+    { "en": "string", "phonetic": "string", "zh": "string", "relation_zh": "string" }
+  ],
   "grammar_breakdown_zh": "string",
   "sentence_skeletons": [
     { "pattern": "string", "meaning_zh": "string" }
@@ -260,6 +276,9 @@ private const val WordOutputExample = """
 词条模板的实际 JSON 示例（只用于说明格式，按用户输入生成新内容）：
 {
   "query_type":"word",
+  "source_zh":null,
+  "sub_type":null,
+  "english_equivalents":[],
   "word":"hesitate",
   "tts_text":"hesitate",
   "word_segments":[{"text":"hesitate","query":"hesitate","is_phrase":false}],
