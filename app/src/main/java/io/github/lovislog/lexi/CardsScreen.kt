@@ -273,8 +273,11 @@ private fun formatInterval(milliseconds: Long): String {
     }
 }
 
-private enum class LibraryFilter(val kind: ContentKind?) {
-    ALL(null), WORD(ContentKind.WORD), PHRASE(ContentKind.PHRASE), SENTENCE(ContentKind.SENTENCE), PAUSED(null)
+private enum class LibraryFilter(val language: LibraryLanguage?, val zh: String, val en: String) {
+    ALL(null, "全部", "All"),
+    ENGLISH(LibraryLanguage.EN, "英文词库", "English"),
+    CHINESE(LibraryLanguage.ZH, "中文词库", "Chinese"),
+    PAUSED(null, "已暂停", "Paused"),
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -285,14 +288,18 @@ internal fun LibraryPage(
 ) {
     var search by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(LibraryFilter.ALL) }
+    var subType by rememberSaveable { mutableStateOf<LibrarySubType?>(null) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
-    val visible = remember(cards, filter, search) {
+    val visible = remember(cards, filter, subType, search) {
         val query = search.trim()
         cards.filter { card ->
             val answer = card.result.explanation
-            card.archived == (filter == LibraryFilter.PAUSED) && (filter.kind == null || answer.kind == filter.kind) &&
-                listOf(card.result.input.text, card.result.input.context, answer.answerEn, answer.meaningZh,
-                    answer.tag, answer.cefr, answer.frequency, answer.partOfSpeech)
+            card.archived == (filter == LibraryFilter.PAUSED) &&
+                (filter.language == null || card.result.langGroup == filter.language) &&
+                (subType == null || card.result.subType == subType) &&
+                (listOf(card.result.input.text, card.result.input.context, answer.answerEn, answer.meaningZh,
+                    answer.tag, answer.cefr, answer.frequency, answer.partOfSpeech) +
+                    answer.wordAnalysis?.englishEquivalents.orEmpty().map { it.en })
                     .any { it.contains(query, ignoreCase = true) }
         }
     }
@@ -322,8 +329,24 @@ internal fun LibraryPage(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 LibraryFilter.entries.forEach { choice ->
-                    val label = choice.kind?.display(plural = true) ?: if (choice == LibraryFilter.ALL) tr("全部", "All") else tr("已暂停", "Paused")
-                    ChoicePill(label, filter == choice) { filter = choice }
+                    ChoicePill(tr(choice.zh, choice.en), filter == choice) {
+                        if (filter != choice) subType = null
+                        filter = choice
+                    }
+                }
+            }
+        }
+        filter.language?.let { language ->
+            item {
+                FlowRow(
+                    Modifier.fillMaxWidth().selectableGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    ChoicePill(tr("全部", "All"), subType == null) { subType = null }
+                    LibrarySubType.entries.filter { it.language == language }.forEach { choice ->
+                        ChoicePill(tr(choice.zh, choice.en), subType == choice) { subType = choice }
+                    }
                 }
             }
         }
@@ -343,6 +366,8 @@ internal fun LibraryPage(
 @Composable
 private fun LibraryRow(card: SavedCard, working: Boolean, onOpen: () -> Unit, onArchive: () -> Unit) {
     val answer = card.result.explanation
+    val chinese = card.result.langGroup == LibraryLanguage.ZH
+    val type = card.result.subType.label(LocalAppearance.current.english)
     val dot = when (answer.kind) {
         ContentKind.WORD -> Color(0xFF1A73E8)
         ContentKind.PHRASE -> Color(0xFF8B5CF6)
@@ -354,10 +379,12 @@ private fun LibraryRow(card: SavedCard, working: Boolean, onOpen: () -> Unit, on
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(8.dp).background(dot, CircleShape))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(answer.answerEn, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                Text(if (chinese) card.result.chineseHeadword else answer.answerEn,
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(answer.meaningZh, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(answer.kind.display() + " · " +
+                Text(if (chinese) answer.answerEn else answer.meaningZh,
+                    style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(type + " · " +
                     if (card.archived) tr("已暂停", "Paused") else formatDate(card.schedule.dueAt),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -379,12 +406,16 @@ private fun LibraryDetail(
     val stability = String.format(if (english) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE, "%.2f", schedule.stability)
     val difficulty = String.format(Locale.ROOT, "%.1f", schedule.difficulty)
     LexiSheet(
-        if (fullExplanation) tr("词句详情", "Vocabulary details") else answer.answerEn,
+        when {
+            fullExplanation -> tr("词句详情", "Vocabulary details")
+            card.result.langGroup == LibraryLanguage.ZH -> card.result.chineseHeadword
+            else -> answer.answerEn
+        },
         expandable = true, initiallyExpanded = fullExplanation, onDismiss = onDismiss,
     ) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (fullExplanation || answer.hasAnalysis) {
+            if (fullExplanation || answer.hasAnalysis || card.result.langGroup == LibraryLanguage.ZH) {
                 LookupExplanation(card.result, onLookup)
                 LookupReading {
                     if (!answer.hasAnalysis) Note(tr("用法解析", "Usage"), answer.usageEn)
@@ -392,7 +423,7 @@ private fun LibraryDetail(
                 }
             } else {
                 LookupReading {
-                    Tag(answer.kind.display())
+                    Tag(card.result.subType.label(english))
                     ResultPhonetics(answer)
                     CoreMeaning(answer)
                     Examples(answer.examples, onLookup)
@@ -437,4 +468,5 @@ internal fun ChoicePill(label: String, selected: Boolean, onClick: () -> Unit) {
 
 private fun SavedCard.usesExpression(expressionMode: Boolean): Boolean =
     result.explanation.intent == LookupIntent.EXPRESS ||
-        (expressionMode && (result.explanation.wordAnalysis != null || result.explanation.englishSentence != null))
+        (expressionMode && (result.langGroup == LibraryLanguage.ZH ||
+            result.explanation.wordAnalysis != null || result.explanation.englishSentence != null))

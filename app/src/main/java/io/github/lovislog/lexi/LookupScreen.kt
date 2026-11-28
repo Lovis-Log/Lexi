@@ -111,7 +111,7 @@ internal fun LookupPanel(
                         focus.clearFocus()
                         onSearch()
                     },
-                ) { Text(if (loading) tr("查询中", "Looking up") else tr("查词  →", "Lookup  →")) }
+                ) { Text(if (loading) tr("查询中", "Looking up") else tr("查询", "Look up")) }
             }
         }
     }
@@ -165,6 +165,7 @@ internal fun LookupExplanation(
     val word = answer.wordAnalysis
     val translation = answer.translation
     val englishSentence = answer.englishSentence
+    val chineseTerm = result.langGroup == LibraryLanguage.ZH && result.subType != LibrarySubType.ZH_SENTENCE
     val colors = MaterialTheme.colorScheme
     FrostedCard(Modifier.fillMaxWidth(), radius = 22) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -193,11 +194,15 @@ internal fun LookupExplanation(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
-                    InteractiveEnglishText(answer.headSegments, answer.answerEn, onLookup,
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold))
-                    val syllables = word?.syllables ?: answer.syllables
-                    if (syllables.isNotBlank()) Text(syllables, style = MaterialTheme.typography.labelMedium,
-                        color = colors.onSurfaceVariant)
+                    if (chineseTerm) {
+                        ResultCaption(tr("中文原词", "Chinese source"), result.chineseHeadword)
+                    } else {
+                        InteractiveEnglishText(answer.headSegments, answer.answerEn, onLookup,
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold))
+                        val syllables = word?.syllables ?: answer.syllables
+                        if (syllables.isNotBlank()) Text(syllables, style = MaterialTheme.typography.labelMedium,
+                            color = colors.onSurfaceVariant)
+                    }
                 }
                 if (onSave != null) {
                     FilledTonalButton(
@@ -227,6 +232,7 @@ internal fun LookupExplanation(
                     ResultCaption(tr("自然译文", "Natural translation"), englishSentence.naturalTranslationZh)
                     ResultCaption(tr("语气与场景", "Tone and situation"), englishSentence.toneAndScene)
                 }
+                chineseTerm -> ChineseEquivalentCards(result.englishEquivalents, onLookup)
                 else -> ResultPhonetics(answer)
             }
             val grammar = word?.grammarSkeleton?.joinToString("\n") ?: answer.grammar
@@ -345,6 +351,45 @@ internal fun LookupExplanation(
         trailing = tr("常见误区", "Common mistakes"), radius = 24) {
         Text(answer.pitfalls.ifBlank { noNotes }, style = MaterialTheme.typography.bodyMedium,
             color = if (answer.pitfalls.isBlank()) colors.onSurfaceVariant else Color(0xFF93470C))
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChineseEquivalentCards(
+    equivalents: List<EnglishEquivalent>,
+    onLookup: (LookupInput) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    equivalents.forEach { candidate ->
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = colors.primaryContainer.copy(alpha = 0.35f),
+        ) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    candidate.en,
+                    Modifier.fillMaxWidth().clickable(onClickLabel = tr("查这个英文表达", "Look up this expression")) {
+                        onLookup(LookupInput(candidate.en))
+                    },
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold, color = colors.primary,
+                )
+                val ipa = listOf("US" to candidate.phoneticUs, "UK" to candidate.phoneticUk)
+                    .mapNotNull { (accent, value) -> formatIpa(value).takeIf(String::isNotBlank)?.let { "$accent $it" } }
+                if (ipa.isNotEmpty()) Text(ipa.joinToString(" · "), style = MaterialTheme.typography.bodyMedium)
+                if (candidate.pos.isNotBlank() || candidate.usageLabelZh.isNotBlank()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (candidate.pos.isNotBlank()) ResultPill(candidate.pos)
+                        if (candidate.usageLabelZh.isNotBlank()) ResultPill(candidate.usageLabelZh)
+                    }
+                }
+                if (candidate.nuanceZh.isNotBlank()) {
+                    Text(candidate.nuanceZh, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                }
+            }
+        }
     }
 }
 

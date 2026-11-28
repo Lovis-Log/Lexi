@@ -65,4 +65,43 @@ class LookupTest {
         assertTrue(detailed.isValid())
         assertEquals("Scenario 3", detailed.examples.last().scene)
     }
+
+    @Test
+    fun oldEntriesReceiveLanguageAndSubtypeWhenRead() {
+        fun legacy(text: String, answer: String, kind: String) = lexiJson.decodeFromString<LookupResult>(
+            """{"input":{"text":"$text"},"explanation":{"intent":"UNDERSTAND","kind":"$kind","answerEn":"$answer","meaningZh":"示例","usageEn":"Example."}}""",
+        )
+        assertEquals(LibrarySubType.ZH_VOCAB, legacy("进位", "carry over", "PHRASE").subType)
+        assertEquals(LibrarySubType.ZH_IDIOM, legacy("半途而废", "give up halfway", "PHRASE").subType)
+        assertEquals(LibrarySubType.ZH_SENTENCE, legacy("船已经离港。", "The ship has left.", "SENTENCE").subType)
+        assertEquals(LookupFormat.WORD, LookupInput("说曹操，曹操到").format)
+        assertEquals(LookupFormat.WORD, LookupInput("我行我素").format)
+        assertEquals(LibrarySubType.WORD, legacy("ship", "ship", "WORD").subType)
+        assertEquals(LibrarySubType.PHRASE, legacy("carry over", "carry over", "PHRASE").subType)
+        assertEquals(LibrarySubType.SENTENCE, legacy("The ship has left.", "The ship has left.", "SENTENCE").subType)
+        val json = lexiJson.encodeToString(legacy("进位", "carry over", "PHRASE"))
+        assertTrue(json.contains("\"lang_group\":\"zh\""))
+        assertTrue(json.contains("\"sub_type\":\"zh_vocab\""))
+    }
+
+    @Test
+    fun revisitingALinkedResultConsumesTheInterveningTrail() {
+        fun location(input: LookupInput, historyOpen: Boolean = false) = AppLocation(
+            Page.LOOKUP, historyOpen, false, input.text, input.context,
+            LookupState.Ready(
+                LookupResult(input, Explanation(LookupIntent.UNDERSTAND, ContentKind.WORD, input.text, "释义", "Usage.")),
+            ),
+            0,
+        )
+        val source = location(LookupInput("ship"))
+        val first = location(LookupInput("harbor"))
+        val differentContext = location(LookupInput("harbor", "A ship entered the harbor."))
+        val history = location(LookupInput("harbor"), historyOpen = true)
+        val trail = mutableListOf(source, first, differentContext, history)
+
+        assertEquals(first, trail.popThrough { it.showsLookup(LookupInput("harbor")) })
+        assertEquals(listOf(source), trail)
+        assertNull(trail.popThrough { it.showsLookup(LookupInput("cargo")) })
+        assertEquals(listOf(source), trail)
+    }
 }

@@ -14,15 +14,17 @@ android {
         applicationId = "io.github.lovislog.lexi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
         create("preview") {
             initWith(getByName("debug"))
-            applicationIdSuffix = ".acceptance"
+            // The published v0.1.0 preview used this package name.
+            applicationIdSuffix = ".refactorcheck"
             versionNameSuffix = "-preview"
+            isDebuggable = false
             matchingFallbacks += "debug"
         }
     }

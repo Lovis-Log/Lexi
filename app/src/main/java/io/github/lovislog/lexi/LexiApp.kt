@@ -50,10 +50,24 @@ internal data class AppLocation(
     val context: String,
     val lookup: LookupState,
     val scroll: Int,
-)
+) {
+    fun showsLookup(input: LookupInput): Boolean =
+        page == Page.LOOKUP && !historyOpen && lookup.readyFor(input)
+}
+
+private fun LookupState.readyFor(input: LookupInput) =
+    (this as? LookupState.Ready)?.result?.input == input
+
+internal fun <T> MutableList<T>.popThrough(matches: (T) -> Boolean): T? {
+    val index = indexOfLast(matches)
+    if (index < 0) return null
+    val destination = this[index]
+    subList(index, size).clear()
+    return destination
+}
 
 @Composable
-internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
+internal fun LexiApp(model: LexiModel, openSettings: Boolean, onExit: () -> Unit) {
     var page by rememberSaveable { mutableStateOf(if (openSettings) Page.SETTINGS else Page.LOOKUP) }
     var historyOpen by rememberSaveable { mutableStateOf(false) }
     var openAi by rememberSaveable { mutableStateOf(openSettings) }
@@ -61,6 +75,7 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
     var context by rememberSaveable { mutableStateOf("") }
     var showPhotos by rememberSaveable { mutableStateOf(false) }
     var photoSubmitted by rememberSaveable { mutableStateOf(false) }
+    var confirmExit by rememberSaveable { mutableStateOf(false) }
     val backStack = model.backStack
     var lookupVisit by rememberSaveable { mutableIntStateOf(0) }
     var scrollStart by rememberSaveable { mutableIntStateOf(0) }
@@ -92,13 +107,27 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
     fun location() = AppLocation(page, historyOpen, openAi, query, context, lookup, lookupScroll.value)
 
     fun rememberLocation(from: AppLocation = location()) {
-        if (backStack.size == 20) backStack.removeAt(0)
-        if (backStack.lastOrNull() != from) backStack.add(from)
+        if (backStack.lastOrNull() == from) return
+        if (backStack.size >= 20) backStack.removeAt(0)
+        backStack.add(from)
     }
 
     fun resetLookupScroll(position: Int = 0) {
         scrollStart = position
         lookupVisit++
+    }
+
+    fun restoreLocation(previous: AppLocation) {
+        val current = location()
+        page = previous.page
+        historyOpen = previous.historyOpen
+        openAi = previous.openAi
+        query = previous.query
+        context = previous.context
+        if (current.query != previous.query || current.context != previous.context || current.scroll != previous.scroll) {
+            resetLookupScroll(previous.scroll)
+        }
+        model.restoreLookup(previous.lookup)
     }
 
     fun goBack() {
@@ -108,31 +137,16 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
         }
         val previous = backStack.removeLastOrNull()
         if (previous != null) {
-            val current = location()
-            page = previous.page
-            historyOpen = previous.historyOpen
-            openAi = previous.openAi
-            query = previous.query
-            context = previous.context
-            if (current.query != previous.query || current.context != previous.context || current.scroll != previous.scroll) {
-                resetLookupScroll(previous.scroll)
-            }
-            model.restoreLookup(previous.lookup)
+            restoreLocation(previous)
         } else if (page != Page.LOOKUP) {
             page = Page.LOOKUP
             openAi = false
-        } else if (lookup != LookupState.Idle) {
-            model.clearLookup()
-            resetLookupScroll()
         } else {
-            query = ""
-            context = ""
+            confirmExit = true
         }
     }
 
-    val canGoBack = historyOpen || backStack.isNotEmpty() || page != Page.LOOKUP ||
-        lookup != LookupState.Idle || query.isNotBlank() || context.isNotBlank()
-    BackHandler(enabled = canGoBack && !showPhotos, onBack = ::goBack)
+    BackHandler(enabled = !showPhotos && !confirmExit, onBack = ::goBack)
 
     fun openAiSettings(from: AppLocation = location()) {
         rememberLocation(from)
@@ -142,10 +156,17 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
     }
 
     fun lookupAgain(input: LookupInput) {
-        rememberLocation()
+        val destination = input.normalized()
+        val current = location()
+        if (current.showsLookup(destination)) return
+        backStack.popThrough { it.showsLookup(destination) }?.let {
+            restoreLocation(it)
+            return
+        }
+        rememberLocation(current)
         page = Page.LOOKUP
-        query = input.text
-        context = input.context
+        query = destination.text
+        context = destination.context
         historyOpen = false
         resetLookupScroll()
         model.search(query, context)
@@ -170,7 +191,7 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
             bottomBar = {
                 FloatingNavigation(page) { selected ->
                     if (selected != page || historyOpen) {
-                        rememberLocation()
+                        backStack.clear()
                         historyOpen = false
                         openAi = false
                         page = selected
@@ -189,10 +210,7 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
                             modifier.verticalScroll(lookupScroll).padding(horizontal = 18.dp, vertical = 14.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                if (canGoBack) TextButton(onClick = ::goBack) { Text(tr("‹ 返回", "‹ Back")) }
-                                BrandHeading(Modifier.weight(1f))
-                            }
+                            BrandHeading(Modifier.fillMaxWidth())
                             LookupPanel(
                                 query = query,
                                 context = context,
@@ -200,12 +218,10 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
                                 saved = cards,
                                 working = working,
                                 onQuery = {
-                                    if (lookup is LookupState.Ready) rememberLocation()
                                     query = it
                                     model.clearLookup()
                                 },
                                 onContext = {
-                                    if (lookup is LookupState.Ready) rememberLocation()
                                     context = it
                                     model.clearLookup()
                                 },
@@ -269,6 +285,18 @@ internal fun LexiApp(model: LexiModel, openSettings: Boolean) {
             },
         )
     }
+    if (confirmExit) {
+        AlertDialog(
+            onDismissRequest = { confirmExit = false },
+            title = { Text(tr("退出应用？", "Exit the app?")) },
+            confirmButton = {
+                TextButton(onClick = onExit) { Text(tr("退出应用", "Exit app")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmExit = false }) { Text(tr("取消", "Cancel")) }
+            },
+        )
+    }
 }
 
 @Composable
@@ -285,13 +313,15 @@ internal fun SelectionWindow(
     val working by model.working.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
     val previous = remember { mutableStateListOf<Pair<LookupInput, LookupState>>() }
-    fun goBack() {
-        val (input, state) = previous.removeLastOrNull() ?: return
+    fun restoreLookup(entry: Pair<LookupInput, LookupState>) {
+        val (input, state) = entry
         query = input.text
         context = input.context
         model.restoreLookup(state)
     }
-    BackHandler(enabled = previous.isNotEmpty(), onBack = ::goBack)
+    BackHandler(enabled = previous.isNotEmpty()) {
+        previous.removeLastOrNull()?.let(::restoreLookup)
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth().heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.78f),
@@ -303,7 +333,6 @@ internal fun SelectionWindow(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (previous.isNotEmpty()) TextButton(onClick = ::goBack) { Text(tr("‹ 返回", "‹ Back")) }
                 BrandHeading(Modifier.weight(1f))
                 TextButton(onClick = onClose) { Text(tr("关闭", "Close")) }
             }
@@ -320,12 +349,20 @@ internal fun SelectionWindow(
                 onSearch = { model.search(query, context) },
                 onSave = model::save,
                 onSettings = onOpenApp,
-                onLinkedLookup = {
-                    if (previous.size == 20) previous.removeAt(0)
-                    previous.add(LookupInput(query, context) to lookup)
-                    query = it.text
-                    context = it.context
-                    model.search(query, context)
+                onLinkedLookup = { input ->
+                    val destination = input.normalized()
+                    if (!lookup.readyFor(destination)) {
+                        val earlier = previous.popThrough { it.second.readyFor(destination) }
+                        if (earlier != null) {
+                            restoreLookup(earlier)
+                        } else {
+                            if (previous.size >= 20) previous.removeAt(0)
+                            previous.add(LookupInput(query, context) to lookup)
+                            query = destination.text
+                            context = destination.context
+                            model.search(query, context)
+                        }
+                    }
                 },
                 compact = true,
             )

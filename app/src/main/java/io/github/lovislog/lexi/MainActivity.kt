@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
         val openSettings = intent.getBooleanExtra(OpenSettings, false)
         setContent {
             val appearance by model.appearance.collectAsStateWithLifecycle()
-            LexiTheme(appearance) { LexiApp(model, openSettings) }
+            LexiTheme(appearance) { LexiApp(model, openSettings, onExit = ::finishAffinity) }
         }
     }
 }
